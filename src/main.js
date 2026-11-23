@@ -246,7 +246,7 @@ function render() {
   const el = app();
   if (!el) return;
   document.documentElement.dataset.theme = state.theme;
-  if (state.map) { state.map.remove(); state.map = null; }
+  destroyMap();
 
   if (state.view === 'ride') el.innerHTML = viewRide();
   else if (state.view === 'new') el.innerHTML = viewNew();
@@ -723,7 +723,13 @@ function mountMapIfNeeded() {
     ? [lat, lng]
     : (placeOf(state.detail?.ride?.from_place) ? [placeOf(state.detail.ride.from_place).lat, placeOf(state.detail.ride.from_place).lng] : [36.0013119, 127.5058117]);
 
-  const map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true }).setView(center, 13);
+  let map;
+  try {
+    map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true }).setView(center, 13);
+  } catch (err) {
+    console.warn('지도를 그리지 못했어요', err);
+    return;
+  }
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 18,
     attribution: '© OpenStreetMap',
@@ -743,7 +749,18 @@ function mountMapIfNeeded() {
     });
   }
   state.map = map;
-  setTimeout(() => map.invalidateSize(), 60);
+  // 지도를 지운 뒤에 늦게 도착한 타이머가 애니메이션을 건드리지 않도록 확인합니다
+  setTimeout(() => {
+    if (state.map !== map) return;
+    try { map.invalidateSize(); } catch { /* 이미 사라진 지도 */ }
+  }, 60);
+}
+
+function destroyMap() {
+  const map = state.map;
+  state.map = null;
+  if (!map) return;
+  try { map.off(); map.remove(); } catch { /* 이미 정리된 지도 */ }
 }
 
 /* ── 이벤트 ───────────────────────────────────────────────────────── */
