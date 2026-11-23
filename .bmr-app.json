@@ -1,0 +1,12 @@
+{
+  "slug": "taxi",
+  "name": "공유 택시",
+  "schema": "taxi",
+  "db_role": "taxi_dev",
+  "bucket": "taxi",
+  "function": "taxi-fn",
+  "secret_prefix": "TAXI_",
+  "supabase_ref": "wjvqavianqceeyyxonfg",
+  "url": "https://bmrgoodway.github.io/taxi/",
+  "template": "bmr-app-templates v2"
+}
