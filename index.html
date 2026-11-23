@@ -1,33 +1,53 @@
 <!doctype html>
-<html lang="ko">
+<html lang="ko" data-theme="day">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>공유 택시 · 준비 중 · BMR APPS</title>
-<meta name="description" content="공유 택시 — 준비 중인 페이지입니다 (BMR APPS)">
-<meta name="theme-color" content="#0abbee">
+<title>별무리 카풀 · 마을 공유 택시</title>
+<meta name="description" content="별무리 마을 공유 카풀 — 차를 구하는 사람과 빈자리를 내주는 사람을 잇는 무료 품앗이. 카톡 단톡방에 링크 한 줄로 붙여넣고, 운전자 매칭·출발 알림·위치 공유까지. GOODWAY APPS.">
+<meta name="theme-color" content="#f7f4ec">
+<meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex">
-<link rel="icon" href="https://wjvqavianqceeyyxonfg.supabase.co/functions/v1/hub-favicon?slug=taxi">
+<link rel="icon" type="image/svg+xml" href="./favicon.svg">
 </head>
 <body>
-<!-- 준비 중 안내 페이지입니다. 앱을 만들면 이 파일(index.html)을 내 앱 화면으로 바꾸세요.
-     개발에 필요한 정보는 BMR APPS 허브의 '내 서비스 정보 → 개발 정보'와 저장소 README.md 에 있습니다. -->
+<a class="skip" href="#main">본문으로 바로 가기</a>
+
 <header class="top">
-  <a class="mark" href="https://bmrgoodway.github.io/" aria-label="BMR APPS 메인 화면"><span>BMR</span><span>APPS</span></a>
+  <a class="mark" href="./" id="logo-home" aria-label="별무리 카풀 처음 화면으로">
+    <svg viewBox="0 0 48 48" role="img" aria-hidden="true" focusable="false">
+      <rect x="1" y="1" width="46" height="46" fill="#ffd400" stroke="#10131a" stroke-width="2"/>
+      <rect x="8" y="18" width="32" height="14" fill="#fffdf6" stroke="#10131a" stroke-width="2.4"/>
+      <path d="M14 18l5-8h11l5 8" fill="#0abbee" stroke="#10131a" stroke-width="2.4" stroke-linejoin="round"/>
+      <rect x="20" y="11" width="9" height="5" fill="#fffdf6" stroke="#10131a" stroke-width="1.8"/>
+      <circle cx="16" cy="33" r="4" fill="#10131a"/><circle cx="33" cy="33" r="4" fill="#10131a"/>
+      <rect x="19" y="6" width="11" height="4" fill="#ff614a" stroke="#10131a" stroke-width="1.8"/>
+      <path d="M27 25h7" stroke="#10131a" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+  </a>
+  <div class="brand">
+    <b>별무리 카풀</b>
+    <small>GOODWAY APPS · TAXI</small>
+  </div>
+
+  <div class="top-actions">
+    <button type="button" class="icon-btn" id="btn-theme" data-act="theme" aria-label="낮/밤 화면 바꾸기" title="낮/밤 화면">☾</button>
+    <button type="button" class="user-btn" id="btn-user" data-act="login" aria-label="로그인">로그인</button>
+  </div>
 </header>
-<main class="wrap">
-  <section class="hero">
-    <div class="copy">
-      <span class="eyebrow">준비 중</span>
-      <h1 data-app-name>공유 택시</h1>
-      <p class="desc" data-app-desc hidden></p>
-      <p class="notice"><b>준비 중인 페이지입니다.</b> 곧 이 주소에서 서비스를 열 예정이에요.</p>
-      <a class="btn" href="https://bmrgoodway.github.io/">BMR APPS 서비스 둘러보기</a>
-    </div>
-    <div class="art" aria-hidden="true"><i class="a"></i><i class="b"></i><i class="c"></i><i class="d"></i><i class="e"></i><i class="f"></i></div>
-  </section>
+
+<main id="main">
+  <div id="app" aria-live="polite"></div>
 </main>
-<footer class="foot">별무리 개발자들이 함께 만들고 나누는 공간 · <a href="https://bmrgoodway.github.io/">BMR APPS</a></footer>
+
+<footer class="foot">
+  <p><b>별무리 카풀</b> · 별무리 마을 이웃끼리 차를 나누는 무료 품앗이</p>
+  <p class="fine">영리 목적의 유상 운송이 아닙니다 · <a href="https://bmrgoodway.github.io/">GOODWAY APPS</a> · © <span id="year"></span></p>
+</footer>
+
+<div id="sheet" class="sheet" hidden role="dialog" aria-modal="true"></div>
+<div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
+
 <script type="module" src="/src/main.js"></script>
 </body>
 </html>

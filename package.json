@@ -6,11 +6,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "db:migrate": "node scripts/db-migrate.mjs"
+    "db:migrate": "node scripts/db-migrate.mjs",
+    "check": "node scripts/bmr-check.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.119.0",
-    "pretendard": "^1.3.9"
+    "pretendard": "^1.3.9",
+    "leaflet": "^1.9.4"
   },
   "devDependencies": {
     "pg": "^8.16.0",

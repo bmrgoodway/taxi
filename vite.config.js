@@ -8,7 +8,7 @@ const BASE = '/taxi/';
 // GitHub Pages 는 응답 헤더를 못 바꾸므로 보안 정책(CSP)을 meta 태그로 넣는다 (빌드할 때만).
 // 다른 외부 주소(이미지, API 등)를 쓰려면 아래 목록에 그 주소를 더하세요.
 const cspFor = (SB) => [
-  "default-src 'self'", "script-src 'self'", "style-src 'self'", `img-src 'self' data: blob: ${SB}`, "font-src 'self' data:",
+  "default-src 'self'", "script-src 'self'", "style-src 'self'", `img-src 'self' data: blob: ${SB} https://*.tile.openstreetmap.org`, "font-src 'self' data:",
   `connect-src 'self' ${SB} ${SB.replace('https://', 'wss://')}`, "base-uri 'self'", "form-action 'self'", "object-src 'none'", "frame-src 'none'",
 ].join('; ');
 const csp = (CSP) => ({
