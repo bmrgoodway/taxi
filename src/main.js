@@ -522,7 +522,7 @@ function viewRide() {
 
   ${(role !== 'guest' && role !== 'signedIn' && (driverInfo || driverMember)) ? driverCard(d) : ''}
 
-  ${location || r.live_share ? mapCard(r, location, role) : ''}
+  ${(location || r.live_share || role === 'driver' || role === 'driverOwner') ? mapCard(r, location, role) : ''}
 
   <section class="card">
     <h2>운행 알림 · 짧은 소통</h2>
