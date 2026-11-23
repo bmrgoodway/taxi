@@ -92,7 +92,7 @@ code { font-size: 12px; word-break: break-all; }
 
 /* ── 상단바 ─────────────────────────────────────────────────────── */
 .top {
-  position: sticky; top: 0; z-index: 40;
+  position: sticky; top: 0; z-index: 60;
   display: flex; align-items: center; gap: 10px;
   padding: 9px max(12px, calc((100% - 880px) / 2)) 9px;
   padding-left: max(12px, env(safe-area-inset-left));
@@ -333,6 +333,16 @@ code { font-size: 12px; word-break: break-all; }
   background: var(--paper); border: var(--bw) solid var(--line-soft); position: relative; z-index: 1;
 }
 .track li .lbl { font-size: 11px; font-weight: 800; color: var(--soft); }
+.detail-head .track li .lbl { color: rgba(10, 14, 20, 0.62); }
+.detail-head .track li.now .lbl { color: #10131a; }
+.detail-head.st-matched .track li .lbl { color: rgba(255, 255, 255, 0.82); }
+.detail-head.st-matched .track li.now .lbl { color: #fff; }
+.detail-head .track li::before { background: rgba(10, 14, 20, 0.25); }
+.detail-head .track li.done::before { background: rgba(10, 14, 20, 0.7); }
+.detail-head.st-matched .track li::before { background: rgba(255, 255, 255, 0.35); }
+.detail-head.st-matched .track li.done::before { background: #fff; }
+.detail-head .track li .dot { background: rgba(255, 255, 255, 0.55); border-color: rgba(10, 14, 20, 0.8); }
+.detail-head .track li.now .dot { background: var(--yellow); }
 .track li.done .dot { background: var(--paper-2); border-color: var(--line); }
 .track li.done::before { background: var(--line); }
 .track li.now .dot { background: var(--yellow); border-color: var(--line); box-shadow: var(--shadow-sm); }
@@ -400,7 +410,7 @@ code { font-size: 12px; word-break: break-all; }
 .comment-form { display: flex; gap: 8px; margin-top: 14px; }
 .comment-form input { flex: 1; }
 
-.map-card .map { height: 220px; border: var(--bw) solid var(--line); background: var(--paper-2); margin-top: 10px; }
+.map-card .map { position: relative; z-index: 0; height: 220px; border: var(--bw) solid var(--line); background: var(--paper-2); margin-top: 10px; }
 .map-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
 .badge-live { font-size: 11px; background: var(--coral); color: #2b0a05; padding: 1px 6px; border: 1.5px solid var(--line); }
 .leaflet-container { font-family: var(--font); }
