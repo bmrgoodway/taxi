@@ -18,7 +18,7 @@ const state = {
   kind: 'need',
   rideId: null,
   rides: [],
-  filter: 'open',
+  filter: 'active',
   detail: null,
   loading: true,
   error: '',
@@ -151,10 +151,13 @@ function welcome(user) {
   const pending = local.get('pending-ride', null);
   if (user && pending) {
     local.remove('pending-ride');
+    state.justCreated = false;
     go('ride', pending);
     return;
   }
   render();
+  // 로그인 정보가 뒤늦게 들어오면 그때 다시 읽습니다 (처음엔 손님으로 읽었을 수 있어요)
+  if (user && state.view === 'ride') loadDetail();
 }
 
 /* ── 라우팅 ───────────────────────────────────────────────────────── */
@@ -252,7 +255,9 @@ function renderUserChip() {
 function viewHome() {
   const list = state.filter === 'mine'
     ? state.rides
-    : state.rides.filter((r) => state.filter === 'all' || r.status === 'open');
+    : state.filter === 'all'
+      ? state.rides
+      : state.rides.filter((r) => ['open', 'matched', 'departed'].includes(r.status));
   const active = state.rides.filter((r) => ['open', 'matched', 'departed'].includes(r.status)).length;
 
   return `
@@ -294,7 +299,7 @@ function viewHome() {
       <p class="sub">${active ? `지금 ${active}건이 열려 있어요` : '아직 올라온 카풀이 없어요'}</p>
     </div>
     <div class="chips" role="group" aria-label="보기 고르기">
-      <button type="button" class="chip ${state.filter === 'open' ? 'on' : ''}" data-act="filter" data-filter="open">모집 중</button>
+      <button type="button" class="chip ${state.filter === 'active' ? 'on' : ''}" data-act="filter" data-filter="active">진행 중</button>
       <button type="button" class="chip ${state.filter === 'all' ? 'on' : ''}" data-act="filter" data-filter="all">전체</button>
       <button type="button" class="chip ${state.filter === 'mine' ? 'on' : ''}" data-act="filter" data-filter="mine">내 글</button>
     </div>
@@ -338,6 +343,10 @@ function emptyList() {
   if (state.filter === 'mine') {
     return `<div class="empty"><p><b>아직 올린 글이 없어요.</b></p><p>가는 일정이 있으면 첫 카풀을 올려 보세요.</p>
       <button type="button" class="btn btn-need sm" data-act="new" data-kind="need">🙋 태워주세요</button></div>`;
+  }
+  if (state.filter === 'active') {
+    return `<div class="empty"><p><b>지금 진행 중인 카풀이 없어요.</b></p><p>첫 카풀을 올리면 카톡에 붙여넣을 링크가 바로 만들어집니다.</p>
+    <button type="button" class="btn btn-need sm" data-act="new" data-kind="need">🙋 태워주세요</button></div>`;
   }
   return `<div class="empty"><p><b>지금은 비어 있어요.</b></p><p>첫 카풀을 올리면 카톡에 붙여넣을 링크가 바로 만들어집니다.</p>
     <button type="button" class="btn btn-need sm" data-act="new" data-kind="need">🙋 태워주세요</button></div>`;
