@@ -2,7 +2,7 @@
 // 모든 권한은 DB 의 RLS 가 지킵니다. 여기서는 '무엇을 묻는지'만 정합니다.
 import { supabase } from './supabase.js';
 
-export const RIDE_FIELDS = 'id, kind, owner, owner_name, from_place, to_place, depart_at, seats, memo, status, pickup_at, live_share, created_at, updated_at';
+export const RIDE_FIELDS = 'id, kind, owner, owner_name, from_place, to_place, depart_at, seats, memo, status, pickup_at, live_share, created_at, updated_at, origin_lat, origin_lng, dest_lat, dest_lng';
 
 const unwrap = ({ data, error }) => {
   if (error) throw new Error(error.message || '데이터를 읽지 못했어요.');
@@ -65,6 +65,11 @@ export async function createRide(payload, user) {
     depart_at: payload.departAt,
     seats: payload.seats,
     memo: payload.memo,
+    // 지도·GPS로 고른 좌표 (직접 입력만 했으면 null — 화면은 거점 이름으로 대략 위치를 찾습니다)
+    origin_lat: payload.fromGeo?.lat ?? null,
+    origin_lng: payload.fromGeo?.lng ?? null,
+    dest_lat: payload.toGeo?.lat ?? null,
+    dest_lng: payload.toGeo?.lng ?? null,
   }).select(RIDE_FIELDS).single());
 
   const { error } = await supabase.from('ride_members').insert({

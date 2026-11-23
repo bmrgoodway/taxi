@@ -28,6 +28,11 @@ const state = {
   justCreated: false,
   map: null,
   pin: null,             // { lat, lng }
+  geo: { from: null, to: null },  // 글쓸 때 고른 좌표 { lat, lng, label, src }
+  pickTarget: 'from',    // 지도 고르기 대상
+  pick: null,            // 지도에서 찍은 위치 { lat, lng, label, failed }
+  pickMap: null,
+  pickMarker: null,
   watching: null,        // geolocation watch id
   theme: local.get('theme', 'day'),
   tick: 0,
@@ -135,6 +140,231 @@ function toast(msg) {
   el.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.classList.remove('show'); setTimeout(() => { el.hidden = true; }, 220); }, 2600);
+}
+
+/* ── 위치 고르기: GPS · 지도 핀 · 주소 찾기 ───────────────────────── */
+// 무료 OpenStreetMap Nominatim 역지오코딩(키 없음). 초당 1회 이하로 부탁하는 서비스예요.
+const geoCache = new Map();
+let lastReverse = 0;
+
+/** 거점 이름 → 좌표 (원클릭 거점 버튼) */
+function presetGeo(name) {
+  const p = placeOf(name);
+  return p ? { lat: p.lat, lng: p.lng, label: p.name, src: 'place' } : null;
+}
+
+function shortAddress(j) {
+  const a = j?.address || {};
+  const name = String(j?.name || '').trim();
+  const small = a.neighbourhood || a.quarter || a.suburb || a.village || a.town || a.hamlet;
+  const mid = a.city || a.county || a.city_district || a.borough;
+  const big = a.province || a.state;
+  const road = a.road ? `${a.road}${a.house_number ? ` ${a.house_number}` : ''}` : '';
+  const isRoad = Boolean(name) && (a.road === name || j?.category === 'highway');
+  // 장소·건물 이름이 있으면 그 이름만 (예: 별무리학교)
+  if (name && !isRoad && name.length <= 30 && !/^[\d\s-]+$/.test(name)) return name;
+  // 도로 이름은 가까운 동네·시군과 함께 (예: 금산군 금산읍 금산로)
+  const area = mid || big;
+  const parts = [area, small, road || (isRoad ? name : '')].filter(Boolean);
+  const out = parts.join(' ') || String(j?.display_name || '');
+  return out.replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+
+/** 좌표 → 사람이 읽는 주소 (한국어). 못 찾으면 빈 글자 — 화면은 좌표로 대신합니다. */
+async function reverseGeocode(lat, lng) {
+  const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+  if (geoCache.has(key)) return geoCache.get(key);
+  const wait = 1100 - (Date.now() - lastReverse);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastReverse = Date.now();
+  const url = 'https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&addressdetails=1&accept-language=ko'
+    + `&lat=${lat.toFixed(6)}&lon=${lng.toFixed(6)}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`주소를 찾지 못했어요 (${res.status})`);
+  const label = shortAddress(await res.json());
+  if (label) geoCache.set(key, label);
+  return label;
+}
+
+const coordText = (lat, lng) => `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+const targetLabel = (target) => (target === 'from' ? '출발지' : '도착지');
+const targetInputId = (target) => (target === 'from' ? 'f-from' : 'f-to');
+
+function geoHint(target) {
+  const g = state.geo[target];
+  if (!g) return `<p class="geo-status" id="geo-${target}">거점 버튼·내 위치·지도 핀으로 정확한 위치를 함께 남길 수 있어요.</p>`;
+  return `<p class="geo-status on" id="geo-${target}"><b>📍 ${esc(g.label)}</b><em>${coordText(g.lat, g.lng)}</em></p>`;
+}
+
+function refreshGeoHint(target) {
+  const el = document.getElementById(`geo-${target}`);
+  if (el) el.outerHTML = geoHint(target);
+}
+
+/** 고른 좌표를 입력란·상태에 반영 (화면을 다시 그리지 않아 입력 중인 값이 살아 있습니다) */
+function applyGeo(target, geo) {
+  state.geo[target] = geo;
+  const input = document.getElementById(targetInputId(target));
+  if (input) { input.value = geo.label; input.classList.add('filled'); }
+  refreshGeoHint(target);
+  if (state.draft) state.draft[target] = geo.label;
+}
+
+function clearGeo(target) {
+  if (!state.geo[target]) return;
+  state.geo[target] = null;
+  refreshGeoHint(target);
+}
+
+/** 📍 내 위치 — GPS 로 읽고 한국어 주소로 바꿔 넣습니다. 권한이 없으면 지도를 열어 줍니다. */
+function fillFromGps(target) {
+  const label = targetLabel(target);
+  if (!('geolocation' in navigator)) {
+    toast('이 브라우저는 위치를 읽을 수 없어요. 지도에서 직접 골라 주세요.');
+    openMapPicker(target);
+    return;
+  }
+  toast(`${label} — 현재 위치를 읽는 중…`);
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const lat = pos.coords.latitude;
+    const lng = pos.coords.longitude;
+    let name = '';
+    try { name = await reverseGeocode(lat, lng); } catch { name = ''; }
+    applyGeo(target, { lat, lng, label: name || `현재 위치 (${coordText(lat, lng)})`, src: 'gps' });
+    toast(name ? `${label}를 현재 위치로 넣었어요.` : `${label}를 현재 위치 좌표로 넣었어요.`);
+  }, (err) => {
+    const denied = err && (err.code === 1 || err.code === 3);
+    toast(denied
+      ? '위치 권한이 꺼져 있어요. 지도에서 직접 골라 주세요.'
+      : '위치를 읽지 못했어요. 지도에서 직접 골라 주세요.');
+    openMapPicker(target);
+  }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+}
+
+/* ── 지도에서 고르기 (모달) ──────────────────────────────────────── */
+const PICK_ICON = () => L.divIcon({ className: 'map-pin pick', html: '<span>📍</span>', iconSize: [30, 30], iconAnchor: [15, 28] });
+
+function pickInfoText() {
+  const p = state.pick;
+  if (!p) return '지도를 눌러 위치를 골라 주세요. 지도를 움직여 더 넓게 볼 수 있어요.';
+  const coords = coordText(p.lat, p.lng);
+  if (p.label) return `📍 <b>${esc(p.label)}</b> · ${coords}`;
+  return p.failed ? `📍 ${coords} · 주소를 찾지 못해 좌표로 저장해요.` : `📍 ${coords} · 주소를 찾는 중…`;
+}
+
+function refreshPick() {
+  const info = document.getElementById('pick-info');
+  if (info) info.innerHTML = pickInfoText();
+  const btn = document.getElementById('pick-apply');
+  if (btn) btn.disabled = !state.pick;
+}
+
+function openMapPicker(target) {
+  state.pickTarget = target;
+  const g = state.geo[target];
+  state.pick = g ? { lat: g.lat, lng: g.lng, label: g.label, failed: false } : null;
+  openSheet(`
+    <h2>🗺️ ${targetLabel(target)}를 지도에서 고르기</h2>
+    <p class="sub">지도를 눌러 핀을 찍으면 그 자리의 주소를 찾아 드려요.</p>
+    <div id="pick-map" class="map pick-map" role="application" aria-label="${targetLabel(target)} 고르기 지도"></div>
+    <p class="pick-info" id="pick-info">${pickInfoText()}</p>
+    <div class="manage-row">
+      <button type="button" class="btn btn-primary" data-act="pick-apply" id="pick-apply" ${state.pick ? '' : 'disabled'}>이 위치로 정하기</button>
+      <button type="button" class="btn sm" data-act="pick-gps">📍 내 위치로</button>
+      <button type="button" class="btn sm" data-act="close-sheet">취소</button>
+    </div>`);
+  setTimeout(() => mountPickMap(), 40);
+}
+
+function mountPickMap() {
+  const el = document.getElementById('pick-map');
+  if (!el) return;
+  const input = document.getElementById(targetInputId(state.pickTarget));
+  const preset = presetGeo(input?.value.trim() ?? '');
+  const start = state.pick ?? preset ?? { lat: 36.0013119, lng: 127.5058117 };
+  let map;
+  try {
+    map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true })
+      .setView([start.lat, start.lng], state.pick || preset ? 15 : 12);
+  } catch (err) {
+    console.warn('지도를 그리지 못했어요', err);
+    return;
+  }
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18, attribution: '© OpenStreetMap',
+  }).addTo(map);
+
+  let marker = null;
+  if (state.pick) marker = L.marker([state.pick.lat, state.pick.lng], { icon: PICK_ICON() }).addTo(map);
+  state.pickMarker = marker;
+
+  map.on('click', async (e) => {
+    const lat = e.latlng.lat;
+    const lng = e.latlng.lng;
+    state.pick = { lat, lng, label: '', failed: false };
+    dropPickMarker(lat, lng);
+    refreshPick();
+    try {
+      const name = await reverseGeocode(lat, lng);
+      if (!state.pick || state.pick.lat !== lat || state.pick.lng !== lng) return;
+      state.pick.label = name;
+      state.pick.failed = !name;
+    } catch {
+      if (!state.pick || state.pick.lat !== lat || state.pick.lng !== lng) return;
+      state.pick.failed = true;
+    }
+    refreshPick();
+  });
+
+  state.pickMap = map;
+  setTimeout(() => {
+    if (state.pickMap !== map) return;
+    try { map.invalidateSize(); } catch { /* 이미 사라진 지도 */ }
+  }, 80);
+}
+
+function destroyPickMap() {
+  const map = state.pickMap;
+  state.pickMap = null;
+  state.pickMarker = null;
+  if (!map) return;
+  try { map.off(); map.remove(); } catch { /* 이미 정리된 지도 */ }
+}
+
+/** 고르기 지도에 핀 하나만 유지합니다 */
+function dropPickMarker(lat, lng) {
+  const map = state.pickMap;
+  if (!map) return;
+  if (state.pickMarker) state.pickMarker.setLatLng([lat, lng]);
+  else state.pickMarker = L.marker([lat, lng], { icon: PICK_ICON() }).addTo(map);
+}
+
+function applyPick() {
+  const p = state.pick;
+  if (!p) return;
+  const target = state.pickTarget;
+  const label = p.label || coordText(p.lat, p.lng);
+  closeSheet();
+  applyGeo(target, { lat: p.lat, lng: p.lng, label, src: 'map' });
+  toast(`${targetLabel(target)}를 지도 위치로 정했어요.`);
+}
+
+async function centerPickOnGps() {
+  if (!('geolocation' in navigator)) { toast('이 브라우저는 위치를 읽을 수 없어요. 지도를 눌러 골라 주세요.'); return; }
+  toast('현재 위치를 찾는 중…');
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    const lat = pos.coords.latitude;
+    const lng = pos.coords.longitude;
+    state.pick = { lat, lng, label: '', failed: false };
+    const map = state.pickMap;
+    if (map) { map.setView([lat, lng], 16); }
+    dropPickMarker(lat, lng);
+    refreshPick();
+    try { state.pick.label = await reverseGeocode(lat, lng); } catch { state.pick.failed = true; }
+    refreshPick();
+  }, () => {
+    toast('위치 권한이 없어요. 지도를 눌러 직접 골라 주세요.');
+  }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
 }
 
 /* ── 로그인 ───────────────────────────────────────────────────────── */
@@ -383,6 +613,12 @@ function viewNew() {
     <button type="button" class="chip place" data-act="fill-place" data-target="${target}" data-name="${p.name}">
       <span aria-hidden="true">${p.emoji}</span> ${p.name}
     </button>`).join('');
+  const pickRow = (target) => `
+    <div class="pick-row">
+      <button type="button" class="pick-btn" data-act="gps" data-target="${target}">📍 내 위치(GPS)</button>
+      <button type="button" class="pick-btn" data-act="map-pick" data-target="${target}">🗺️ 지도에서 고르기</button>
+    </div>
+    ${geoHint(target)}`;
 
   return `
   <div class="page-head">
@@ -403,6 +639,7 @@ function viewNew() {
       <span>출발지</span>
       <input id="f-from" name="from" type="text" inputmode="text" autocomplete="off" placeholder="예: 별무리학교" value="${esc(state.draft?.from ?? '별무리학교')}" required>
       <div class="chips wrap">${chips('from')}</div>
+      ${pickRow('from')}
     </label>
 
     <div class="swap-row">
@@ -413,6 +650,7 @@ function viewNew() {
       <span>도착지</span>
       <input id="f-to" name="to" type="text" inputmode="text" autocomplete="off" placeholder="예: 대전역" value="${esc(state.draft?.to ?? '')}" required>
       <div class="chips wrap">${chips('to')}</div>
+      ${pickRow('to')}
     </label>
 
     <div class="row2">
@@ -474,6 +712,7 @@ function viewRide() {
   const driverInfo = d.driver;
   const driverMember = accepted.find((m) => m.role === 'driver');
   const location = [...d.events].reverse().find((e) => e.kind === 'location' && e.lat != null);
+  const route = rideCoords(r);
   const comments = d.events.filter((e) => e.kind === 'comment' || e.kind === 'status');
 
   return `
@@ -552,7 +791,7 @@ function viewRide() {
 
   ${(role !== 'guest' && role !== 'signedIn' && (driverInfo || driverMember)) ? driverCard(d) : ''}
 
-  ${(location || r.live_share || role === 'driver' || role === 'driverOwner') ? mapCard(r, location, role) : ''}
+  ${(route.origin || route.dest || location || r.live_share || role === 'driver' || role === 'driverOwner') ? mapCard(r, location, role, route) : ''}
 
   <section class="card">
     <h2>운행 알림 · 짧은 소통</h2>
@@ -690,42 +929,79 @@ function sharePanel(r, highlight = false) {
   </section>`;
 }
 
-function mapCard(r, location, role) {
-  const lat = location?.lat ?? null;
-  const lng = location?.lng ?? null;
+function rideCoords(r) {
+  const point = (lat, lng) => (lat != null && lng != null && Number.isFinite(Number(lat)) && Number.isFinite(Number(lng)))
+    ? { lat: Number(lat), lng: Number(lng) }
+    : null;
+  // 글에 저장된 좌표를 먼저 쓰고, 예전 글은 거점 이름의 대략 좌표로 대신합니다
+  const preset = (name) => { const p = placeOf(name); return p ? { lat: p.lat, lng: p.lng } : null; };
+  return {
+    origin: point(r.origin_lat, r.origin_lng) ?? preset(r.from_place),
+    dest: point(r.dest_lat, r.dest_lng) ?? preset(r.to_place),
+  };
+}
+
+function mapCard(r, location, role, route) {
+  const { origin, dest } = route;
+  const car = location?.lat != null ? { lat: location.lat, lng: location.lng } : null;
   const canPin = role === 'driver' || role === 'driverOwner';
+  const routeLink = origin && dest
+    ? 'https://map.kakao.com/link/from/'
+      + `${encodeURIComponent(r.from_place)},${origin.lat},${origin.lng}/to/${encodeURIComponent(r.to_place)},${dest.lat},${dest.lng}`
+    : '';
+  const carLink = car
+    ? `https://map.kakao.com/link/map/${encodeURIComponent('카풀 차량 위치')},${car.lat},${car.lng}`
+    : '';
   return `
   <section class="card map-card">
-    <h2>차 위치 ${r.live_share ? '<span class="badge-live">공유 중</span>' : ''}</h2>
-    <div id="map" class="map" data-lat="${lat ?? ''}" data-lng="${lng ?? ''}" data-pin="${canPin ? '1' : '0'}"></div>
+    <h2>가는 길 · 차 위치 ${r.live_share ? '<span class="badge-live">공유 중</span>' : ''}</h2>
+    <div id="map" class="map" data-lat="${car?.lat ?? ''}" data-lng="${car?.lng ?? ''}" data-pin="${canPin ? '1' : '0'}"
+      data-origin="${origin ? `${origin.lat},${origin.lng}` : ''}" data-dest="${dest ? `${dest.lat},${dest.lng}` : ''}"></div>
+    <p class="map-legend">
+      ${origin ? '<span><i class="lg-pin origin" aria-hidden="true">출</i>출발</span>' : ''}
+      ${dest ? '<span><i class="lg-pin dest" aria-hidden="true">도</i>도착</span>' : ''}
+      ${car ? '<span><i class="lg-pin car" aria-hidden="true">🚕</i>차 위치</span>' : ''}
+    </p>
     <div class="map-foot">
       ${location
-        ? `<span>마지막 갱신 <b>${ago(location.created_at)}</b> · ${esc(location.created_name || '운전자')}</span>
-           <a class="mini" target="_blank" rel="noopener" href="https://map.kakao.com/link/map/${encodeURIComponent('카풀 차량 위치')},${location.lat},${location.lng}">지도앱에서 열기</a>`
-        : `<span>아직 위치 정보가 없어요.${canPin ? ' 지도를 누르면 위치를 직접 찍을 수 있어요.' : ''}</span>`}
+        ? `<span>마지막 갱신 <b>${ago(location.created_at)}</b> · ${esc(location.created_name || '운전자')}</span>`
+        : `<span>${origin && dest ? '글에 남긴 좌표로 출발·도착을 그렸어요.' : '아직 위치 정보가 없어요.'}${canPin ? ' 지도를 누르면 위치를 직접 찍을 수 있어요.' : ''}</span>`}
+      <span class="map-links">
+        ${routeLink ? `<a class="mini" target="_blank" rel="noopener" href="${routeLink}">🗺️ 길찾기</a>` : ''}
+        ${carLink ? `<a class="mini" target="_blank" rel="noopener" href="${carLink}">🚕 차 위치</a>` : ''}
+      </span>
     </div>
     ${canPin ? `<div class="manage-row">
       <button type="button" class="btn sm" data-act="send-pin" ${state.pin ? '' : 'disabled'}>📌 찍은 위치 알리기</button>
       <button type="button" class="btn sm" data-act="share-toggle" data-on="${r.live_share ? '1' : '0'}">${r.live_share ? 'GPS 공유 끄기' : 'GPS 공유 켜기'}</button>
     </div>` : ''}
-    <p class="fine">지도: © OpenStreetMap · 위치는 운전자가 공유를 켰을 때만 갱신됩니다.</p>
+    <p class="fine">지도: © OpenStreetMap · 출발·도착은 글쓴이가 고른 위치, 차 위치는 운전자가 공유를 켰을 때만 갱신됩니다.</p>
   </section>`;
 }
 
 /* ── 지도 ─────────────────────────────────────────────────────────── */
+const parsePt = (s) => {
+  const [a, b] = String(s || '').split(',').map(Number);
+  return Number.isFinite(a) && Number.isFinite(b) ? { lat: a, lng: b } : null;
+};
+const markerIcon = (cls, text) => L.divIcon({
+  className: `map-pin ${cls}`, html: `<span>${text}</span>`, iconSize: [32, 32], iconAnchor: [16, 16],
+});
+
 function mountMapIfNeeded() {
   const el = document.getElementById('map');
   if (!el) return;
-  const lat = Number(el.dataset.lat);
-  const lng = Number(el.dataset.lng);
+  const car = parsePt(el.dataset.lat && el.dataset.lng ? `${el.dataset.lat},${el.dataset.lng}` : '');
+  const origin = parsePt(el.dataset.origin);
+  const dest = parsePt(el.dataset.dest);
   const hasPin = el.dataset.pin === '1';
-  const center = Number.isFinite(lat) && Number.isFinite(lng)
-    ? [lat, lng]
-    : (placeOf(state.detail?.ride?.from_place) ? [placeOf(state.detail.ride.from_place).lat, placeOf(state.detail.ride.from_place).lng] : [36.0013119, 127.5058117]);
+  const points = [origin, dest, car].filter(Boolean);
+  const center = points[0] ?? { lat: 36.0013119, lng: 127.5058117 };
 
   let map;
   try {
-    map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true }).setView(center, 13);
+    map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true })
+      .setView([center.lat, center.lng], points.length > 1 ? 11 : 13);
   } catch (err) {
     console.warn('지도를 그리지 못했어요', err);
     return;
@@ -735,11 +1011,17 @@ function mountMapIfNeeded() {
     attribution: '© OpenStreetMap',
   }).addTo(map);
 
-  const icon = L.divIcon({ className: 'car-pin', html: '<span>🚕</span>', iconSize: [34, 34], iconAnchor: [17, 30] });
-  const pinIcon = L.divIcon({ className: 'car-pin manual', html: '<span>📌</span>', iconSize: [34, 34], iconAnchor: [17, 30] });
+  const ride = state.detail?.ride;
+  if (origin && ride) L.marker([origin.lat, origin.lng], { icon: markerIcon('origin', '출'), title: `출발 · ${ride.from_place}`, alt: '출발지' }).addTo(map);
+  if (dest && ride) L.marker([dest.lat, dest.lng], { icon: markerIcon('dest', '도'), title: `도착 · ${ride.to_place}`, alt: '도착지' }).addTo(map);
+  if (car) L.marker([car.lat, car.lng], { icon: L.divIcon({ className: 'car-pin', html: '<span>🚕</span>', iconSize: [34, 34], iconAnchor: [17, 30] }), title: '차 위치', alt: '차량 위치' }).addTo(map);
+  if (state.pin) L.marker([state.pin.lat, state.pin.lng], { icon: L.divIcon({ className: 'car-pin manual', html: '<span>📌</span>', iconSize: [34, 34], iconAnchor: [17, 30] }), title: '찍은 위치', alt: '찍은 위치' }).addTo(map);
 
-  if (Number.isFinite(lat) && Number.isFinite(lng)) L.marker([lat, lng], { icon }).addTo(map);
-  if (state.pin) L.marker([state.pin.lat, state.pin.lng], { icon: pinIcon }).addTo(map);
+  if (points.length > 1) {
+    try {
+      map.fitBounds(points.map((p) => [p.lat, p.lng]), { padding: [28, 28], maxZoom: 15 });
+    } catch { /* 점이 하나뿐인 경우 */ }
+  }
 
   if (hasPin) {
     map.on('click', (e) => {
@@ -779,6 +1061,7 @@ document.addEventListener('click', async (ev) => {
   if (act === 'new') {
     state.kind = target.dataset.kind || 'need';
     state.draft = null;
+    state.geo = { from: null, to: null };
     state.justCreated = false;
     go('new');
     return;
@@ -797,14 +1080,25 @@ document.addEventListener('click', async (ev) => {
     return;
   }
   if (act === 'fill-place') {
-    const input = document.getElementById(target.dataset.target === 'from' ? 'f-from' : 'f-to');
+    const target = target.dataset.target;
+    const input = document.getElementById(targetInputId(target));
     if (input) { input.value = target.dataset.name; input.classList.add('filled'); }
+    const geo = presetGeo(target.dataset.name);
+    if (geo) applyGeo(target, geo); else clearGeo(target);
     return;
   }
+  if (act === 'gps') { fillFromGps(target.dataset.target); return; }
+  if (act === 'map-pick') { openMapPicker(target.dataset.target); return; }
+  if (act === 'pick-apply') { applyPick(); return; }
+  if (act === 'pick-gps') { centerPickOnGps(); return; }
   if (act === 'swap') {
     const a = document.getElementById('f-from');
     const b = document.getElementById('f-to');
-    if (a && b) { const t = a.value; a.value = b.value; b.value = t; }
+    if (a && b) {
+      const t = a.value; a.value = b.value; b.value = t;
+      const g = state.geo.from; state.geo.from = state.geo.to; state.geo.to = g;
+      refreshGeoHint('from'); refreshGeoHint('to');
+    }
     return;
   }
   if (act === 'seats') {
@@ -879,6 +1173,15 @@ function bindForms() {
   if (comment) comment.addEventListener('submit', onSubmitComment);
   const sheetForm = document.getElementById('driver-form');
   if (sheetForm) sheetForm.addEventListener('submit', onSubmitDriver);
+  // 직접 타이핑해서 고른 위치와 달라지면 좌표를 버립니다 (지도에 엉뚱한 핀이 남지 않게)
+  for (const target of ['from', 'to']) {
+    const input = document.getElementById(targetInputId(target));
+    if (!input) continue;
+    input.addEventListener('input', () => {
+      const g = state.geo[target];
+      if (g && input.value !== g.label) { state.geo[target] = null; refreshGeoHint(target); }
+    });
+  }
 }
 
 async function onSubmitRide(ev) {
@@ -909,7 +1212,10 @@ async function onSubmitRide(ev) {
   try {
     local.set('name', name);
     if (phone) local.set('phone', phone);
-    const ride = await api.createRide({ kind: state.kind, name, from, to, departAt, seats, memo, phone }, state.user);
+    // 고른 좌표는 입력란 글자가 그때 고른 그 위치일 때만 씁니다
+    const fromGeo = state.geo.from && state.geo.from.label === from ? state.geo.from : null;
+    const toGeo = state.geo.to && state.geo.to.label === to ? state.geo.to : null;
+    const ride = await api.createRide({ kind: state.kind, name, from, to, departAt, seats, memo, phone, fromGeo, toGeo }, state.user);
     state.justCreated = true;
     state.name = name;
     state.detail = null;
@@ -1114,6 +1420,7 @@ async function onSubmitDriver(ev) {
 
 /* ── 시트(모달) ───────────────────────────────────────────────────── */
 function openSheet(html) {
+  destroyPickMap();
   const sheet = document.getElementById('sheet');
   sheet.innerHTML = `<div class="sheet-inner card">${html}</div>`;
   sheet.hidden = false;
@@ -1125,10 +1432,12 @@ function openSheet(html) {
   if (first) setTimeout(() => first.focus({ preventScroll: true }), 30);
 }
 function closeSheet() {
+  destroyPickMap();
   const sheet = document.getElementById('sheet');
   sheet.hidden = true;
   sheet.innerHTML = '';
   state.sheetOpen = false;
+  state.pick = null;
   document.body.classList.remove('sheet-open');
 }
 document.getElementById('sheet')?.addEventListener('click', (e) => {
