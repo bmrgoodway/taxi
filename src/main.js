@@ -1192,7 +1192,7 @@ function boot() {
   if (params.get('ride')) { state.view = 'ride'; state.rideId = params.get('ride'); }
   else if (params.get('new')) { state.view = 'new'; state.kind = params.get('new') === 'offer' ? 'offer' : 'need'; }
 
-  applyAppInfo(' · 별무리 카풀');
+  applyAppInfo(' · GOODWAY APPS');
   render();
 
   onUserChange((user) => welcome(user));
