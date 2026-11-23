@@ -1012,6 +1012,12 @@ function mountMapIfNeeded() {
   }).addTo(map);
 
   const ride = state.detail?.ride;
+  // 출발→도착을 점선으로 이어 두면 지도가 넓게 잡혔을 때도 가는 길이 한눈에 보입니다
+  if (origin && dest) {
+    L.polyline([[origin.lat, origin.lng], [dest.lat, dest.lng]], {
+      color: '#10131a', weight: 3, opacity: 0.45, dashArray: '8 7', interactive: false,
+    }).addTo(map);
+  }
   if (origin && ride) L.marker([origin.lat, origin.lng], { icon: markerIcon('origin', '출'), title: `출발 · ${ride.from_place}`, alt: '출발지' }).addTo(map);
   if (dest && ride) L.marker([dest.lat, dest.lng], { icon: markerIcon('dest', '도'), title: `도착 · ${ride.to_place}`, alt: '도착지' }).addTo(map);
   if (car) L.marker([car.lat, car.lng], { icon: L.divIcon({ className: 'car-pin', html: '<span>🚕</span>', iconSize: [34, 34], iconAnchor: [17, 30] }), title: '차 위치', alt: '차량 위치' }).addTo(map);
