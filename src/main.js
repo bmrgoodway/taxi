@@ -20,6 +20,8 @@ const state = {
   rides: [],
   filter: 'active',
   detail: null,
+  detailSig: '',
+  lastListSig: '',
   loading: true,
   error: '',
   sheetOpen: false,
@@ -165,6 +167,9 @@ function go(view, rideId = null) {
   state.view = view;
   state.rideId = rideId;
   state.error = '';
+  state.detailSig = '';
+  state.loading = view === 'ride';
+  if (view === 'ride' && rideId !== state.detail?.ride?.id) state.detail = null;
   if (view === 'ride') {
     history.replaceState(null, '', `?ride=${rideId}`);
   } else if (view === 'new') {
@@ -181,11 +186,16 @@ function go(view, rideId = null) {
 /* ── 데이터 ───────────────────────────────────────────────────────── */
 async function loadList() {
   try {
-    state.rides = await api.listRides({ mine: state.filter === 'mine', userId: state.user?.id ?? null });
+    const rides = await api.listRides({ mine: state.filter === 'mine', userId: state.user?.id ?? null });
+    const sig = JSON.stringify(rides);
+    const changed = sig !== state.lastListSig;
+    state.rides = rides;
     state.error = '';
+    state.loading = false;
+    // 바뀐 게 없으면 화면을 다시 그리지 않습니다 (누르려는 버튼이 사라지는 일을 막고, 깜빡임도 줄입니다)
+    if (changed) { state.lastListSig = sig; render(); }
   } catch (e) {
     state.error = e.message;
-  } finally {
     state.loading = false;
     render();
   }
@@ -195,11 +205,22 @@ async function loadDetail() {
   if (!state.rideId) return;
   try {
     const d = await api.getRide(state.rideId, { signedIn: Boolean(state.user) });
-    if (!d) { state.error = '글을 찾을 수 없어요. 링크가 맞는지 확인해 주세요.'; state.detail = null; }
-    else { state.detail = d; state.error = ''; }
+    if (!d) { state.error = '글을 찾을 수 없어요. 링크가 맞는지 확인해 주세요.'; state.detail = null; render(); return; }
+    const sig = JSON.stringify([
+      d.ride.status, d.ride.pickup_at, d.ride.live_share, d.ride.updated_at,
+      d.members.map((m) => [m.id, m.status]),
+      d.driver?.updated_at ?? null,
+      d.events.map((e) => e.id),
+      d.contacts,
+    ]);
+    const changed = sig !== state.detailSig;
+    state.detail = d;
+    state.error = '';
+    state.loading = false;
+    if (changed) { state.detailSig = sig; render(); }
+    else renderUserChip();
   } catch (e) {
     state.error = e.message;
-  } finally {
     state.loading = false;
     render();
   }
