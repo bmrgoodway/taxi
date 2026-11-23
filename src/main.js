@@ -615,10 +615,10 @@ function driverBar(r, d) {
   <section class="card action-card">
     <h2>운전자 도구</h2>
     <div class="quick">
-      <button type="button" class="quick-btn" data-act="quick" data-text="지금 출발했어요 🚕">지금 출발했어요</button>
+      <button type="button" class="quick-btn" data-act="quick" data-stage="departed" data-text="지금 출발했어요 🚕">지금 출발했어요</button>
       <button type="button" class="quick-btn" data-act="quick" data-text="5분 뒤 도착해요 ⏱">5분 뒤 도착</button>
       <button type="button" class="quick-btn" data-act="quick" data-text="곧 도착해요! 잠시만 기다려 주세요">거의 도착</button>
-      <button type="button" class="quick-btn" data-act="quick" data-text="도착했어요 🏁">도착했어요</button>
+      <button type="button" class="quick-btn" data-act="quick" data-stage="arrived" data-text="도착 완료! 오늘도 안전 운전 🏁">도착했어요</button>
     </div>
     <div class="manage-row">
       ${r.status === 'matched' ? `<button type="button" class="btn sm" data-act="status" data-status="departed">🚕 출발함으로 바꾸기</button>` : ''}
@@ -810,7 +810,7 @@ document.addEventListener('click', async (ev) => {
   if (act === 'join') { await doJoin(); return; }
   if (act === 'decide') { await doDecide(target.dataset.member, target.dataset.accept === '1'); return; }
   if (act === 'status') { await doStatus(target.dataset.status); return; }
-  if (act === 'quick') { await doQuick(target.dataset.text); return; }
+  if (act === 'quick') { await doQuick(target.dataset.text, target.dataset.stage); return; }
   if (act === 'share-toggle') { await doShareToggle(target.dataset.on === '1'); return; }
   if (act === 'send-pin') { await doSendPin(); return; }
   if (act === 'cancel-ride') { await doCancel(); return; }
@@ -905,11 +905,16 @@ async function doStatus(status) {
   } catch (e) { toast(e.message || '바꾸지 못했어요.'); }
 }
 
-async function doQuick(text) {
+async function doQuick(text, stage) {
   const r = state.detail?.ride;
   if (!r) return;
+  const name = state.name || displayName(state.user);
   try {
-    await api.postEvent(r.id, { kind: 'status', text }, state.user, state.name || displayName(state.user));
+    if (stage && r.status !== stage && stage !== 'cancelled') {
+      await api.setRideStatus(r.id, stage, state.user, name, text);
+    } else {
+      await api.postEvent(r.id, { kind: 'status', text }, state.user, name);
+    }
     toast('알렸어요.');
     await loadDetail();
   } catch (e) { toast(e.message || '알리지 못했어요.'); }
