@@ -8,9 +8,16 @@ const BASE = '/taxi/';
 // GitHub Pages 는 응답 헤더를 못 바꾸므로 보안 정책(CSP)을 meta 태그로 넣는다 (빌드할 때만).
 // 다른 외부 주소(이미지, API 등)를 쓰려면 아래 목록에 그 주소를 더하세요.
 const cspFor = (SB) => [
-  "default-src 'self'", "script-src 'self'", "style-src 'self'", `img-src 'self' data: blob: ${SB} https://*.tile.openstreetmap.org`, "font-src 'self' data:",
-  // 지도 타일은 openstreetmap, 주소 찾기(역지오코딩)는 nominatim — 둘 다 키 없는 무료 서비스입니다
-  `connect-src 'self' ${SB} ${SB.replace('https://', 'wss://')} https://nominatim.openstreetmap.org`, "base-uri 'self'", "form-action 'self'", "object-src 'none'", "frame-src 'none'",
+  "default-src 'self'",
+  // 카카오맵 JavaScript SDK(dapi.kakao.com) 와 SDK 가 불러오는 조각(t1.daumcdn.net 등)
+  "script-src 'self' https://dapi.kakao.com https://*.daumcdn.net https://*.kakao.com https://*.kakaocdn.net",
+  "style-src 'self' https://*.daumcdn.net",
+  // 지도 타일·마커: 카카오(daumcdn·kakao) / 대체 지도(openstreetmap) / 앱 이미지
+  `img-src 'self' data: blob: ${SB} https://*.tile.openstreetmap.org https://*.daumcdn.net https://*.daum.net https://*.kakao.com https://*.kakaocdn.net`,
+  "font-src 'self' data: https://*.daumcdn.net",
+  // 장소 검색·주소 변환은 카카오(dapi.kakao.com), 대체 주소 찾기는 nominatim
+  `connect-src 'self' ${SB} ${SB.replace('https://', 'wss://')} https://nominatim.openstreetmap.org https://dapi.kakao.com https://*.daumcdn.net https://*.daum.net https://*.kakao.com https://*.kakaocdn.net`,
+  "base-uri 'self'", "form-action 'self'", "object-src 'none'", "frame-src 'none'",
 ].join('; ');
 const csp = (CSP) => ({
   name: 'csp-meta', apply: 'build',

@@ -2,6 +2,19 @@
   "slug": "taxi",
   "hub": "https://wjvqavianqceeyyxonfg.supabase.co/functions/v1/hub-checks",
   "block_dangerous": false,
-  "allowScripts": ["accounts.google.com", "apis.google.com", "cdn.jsdelivr.net", "unpkg.com"],
-  "ignore": ["node_modules", "dist", ".git", "supabase/functions", "scripts"]
+  "allowScripts": [
+    "accounts.google.com",
+    "apis.google.com",
+    "cdn.jsdelivr.net",
+    "unpkg.com",
+    "dapi.kakao.com",
+    "t1.daumcdn.net"
+  ],
+  "ignore": [
+    "node_modules",
+    "dist",
+    ".git",
+    "supabase/functions",
+    "scripts"
+  ]
 }

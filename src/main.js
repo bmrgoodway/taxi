@@ -8,6 +8,7 @@ import { loginWithGoogle, loginWithPassword, logout, onUserChange } from './auth
 import { local, session } from './store.js';
 import { applyAppInfo } from './app-info.js';
 import { PLACES, placeOf } from './places.js';
+import { kakaoOrNull, searchPlaces, searchAddress, coordsToAddress, KAKAO_KEY } from './kakao.js';
 import * as api from './api.js';
 
 /* ── 상태 ─────────────────────────────────────────────────────────── */
@@ -27,16 +28,27 @@ const state = {
   sheetOpen: false,
   justCreated: false,
   map: null,
+  mapKind: '',           // 'kakao' | 'leaflet'
   pin: null,             // { lat, lng }
   geo: { from: null, to: null },  // 글쓸 때 고른 좌표 { lat, lng, label, src }
   pickTarget: 'from',    // 지도 고르기 대상
-  pick: null,            // 지도에서 찍은 위치 { lat, lng, label, failed }
+  pick: null,            // 지도에서 찍은 위치 { lat, lng, label, address, failed }
   pickMap: null,
+  pickMapKind: '',
   pickMarker: null,
+  pickOverlay: null,
+  pickResults: [],       // 장소 검색 결과
+  pickSearched: false,
+  pickMsg: '',
   watching: null,        // geolocation watch id
   theme: local.get('theme', 'day'),
   tick: 0,
 };
+
+// 카카오맵 준비(한 번만 시도) — 실패하면 null 이고 화면은 Leaflet 으로 대체합니다
+let kakaoReady = null;
+const getKakao = () => (kakaoReady ??= kakaoOrNull());
+const HOME = { lat: 36.0013119, lng: 127.5058117 };
 
 const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 const STATUS = {
@@ -170,10 +182,19 @@ function shortAddress(j) {
   return out.replace(/\s+/g, ' ').trim().slice(0, 60);
 }
 
-/** 좌표 → 사람이 읽는 주소 (한국어). 못 찾으면 빈 글자 — 화면은 좌표로 대신합니다. */
+/** 좌표 → 사람이 읽는 주소 (한국어).
+ *  1) 카카오맵 주소 변환(도로명) → 2) 무료 OpenStreetMap Nominatim 순서로 시도합니다.
+ *  못 찾으면 빈 글자 — 화면은 좌표로 대신합니다. */
 async function reverseGeocode(lat, lng) {
   const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
   if (geoCache.has(key)) return geoCache.get(key);
+  const kakao = await getKakao();
+  if (kakao) {
+    try {
+      const label = await coordsToAddress(kakao, lat, lng);
+      if (label) { geoCache.set(key, label); return label; }
+    } catch { /* 주소 변환 실패 — 아래 무료 지도로 한 번 더 */ }
+  }
   const wait = 1100 - (Date.now() - lastReverse);
   if (wait > 0) await new Promise((r) => setTimeout(r, wait));
   lastReverse = Date.now();
@@ -184,6 +205,23 @@ async function reverseGeocode(lat, lng) {
   const label = shortAddress(await res.json());
   if (label) geoCache.set(key, label);
   return label;
+}
+
+/** 장소·주소 글자로 찾기 (카카오맵을 못 쓸 때의 대체) */
+async function nominatimSearch(query) {
+  const wait = 1100 - (Date.now() - lastReverse);
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  lastReverse = Date.now();
+  const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&accept-language=ko'
+    + `&q=${encodeURIComponent(query)}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`검색하지 못했어요 (${res.status})`);
+  const list = await res.json();
+  return (Array.isArray(list) ? list : []).map((j) => {
+    const full = String(j.display_name || '').replace(/\s+/g, ' ').trim();
+    const name = String(j.name || full.split(',')[0] || query).trim();
+    return { name, address: full.slice(0, 100), lat: Number(j.lat), lng: Number(j.lon) };
+  }).filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
 }
 
 const coordText = (lat, lng) => `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
@@ -246,9 +284,10 @@ const PICK_ICON = () => L.divIcon({ className: 'map-pin pick', html: '<span>📍
 
 function pickInfoText() {
   const p = state.pick;
-  if (!p) return '지도를 눌러 위치를 골라 주세요. 지도를 움직여 더 넓게 볼 수 있어요.';
+  if (!p) return '지도를 눌러 위치를 고르거나, 위에서 장소 이름을 검색해 보세요.';
   const coords = coordText(p.lat, p.lng);
-  if (p.label) return `📍 <b>${esc(p.label)}</b> · ${coords}`;
+  const addr = p.address && p.address !== p.label ? ` <em>${esc(p.address)}</em>` : '';
+  if (p.label) return `📍 <b>${esc(p.label)}</b>${addr} · ${coords}`;
   return p.failed ? `📍 ${coords} · 주소를 찾지 못해 좌표로 저장해요.` : `📍 ${coords} · 주소를 찾는 중…`;
 }
 
@@ -259,13 +298,70 @@ function refreshPick() {
   if (btn) btn.disabled = !state.pick;
 }
 
-function openMapPicker(target) {
+function renderPickResults() {
+  const ul = document.getElementById('pick-results');
+  if (!ul) return;
+  ul.hidden = !state.pickSearched;
+  if (!state.pickSearched) { ul.innerHTML = ''; return; }
+  ul.innerHTML = state.pickResults.length
+    ? state.pickResults.map((r, i) => `
+      <li><button type="button" class="pick-result" data-act="pick-result" data-i="${i}">
+        <b>${esc(r.name)}</b><span>${esc(r.address || '')}</span>
+      </button></li>`).join('')
+    : `<li class="pick-empty">${esc(state.pickMsg || '검색 결과가 없어요. 지도에서 직접 골라 주세요.')}</li>`;
+}
+
+/** 장소 이름 → 카카오 장소 검색, 결과가 없으면 주소 검색 → 그래도 없으면 무료 지도 검색 */
+async function runPlaceSearch(raw) {
+  const query = String(raw || '').trim();
+  if (!query) return;
+  state.pickSearched = true;
+  state.pickResults = [];
+  state.pickMsg = '찾는 중…';
+  renderPickResults();
+  const kakao = await getKakao();
+  let list = [];
+  let failed = false;
+  if (kakao) {
+    try {
+      list = await searchPlaces(kakao, query);
+      if (!list.length) list = await searchAddress(kakao, query);
+    } catch { failed = true; }
+  }
+  if (!list.length) {
+    try { list = await nominatimSearch(query); } catch { failed = true; }
+  }
+  state.pickResults = list;
+  state.pickMsg = list.length ? '' : (failed ? '검색하지 못했어요. 지도를 눌러 직접 골라 주세요.' : '검색 결과가 없어요. 지도를 눌러 직접 골라 주세요.');
+  renderPickResults();
+}
+
+function choosePickResult(i) {
+  const r = state.pickResults[i];
+  if (!r) return;
+  state.pick = { lat: r.lat, lng: r.lng, label: r.name || r.address, address: r.address || '', failed: false };
+  centerPickMap(r.lat, r.lng, 3);
+  dropPickMarker(r.lat, r.lng);
+  refreshPick();
+  document.getElementById('pick-q')?.blur();
+}
+
+function openMapPicker(target, focusSearch = false) {
   state.pickTarget = target;
+  state.pickResults = [];
+  state.pickSearched = false;
+  state.pickMsg = '';
   const g = state.geo[target];
-  state.pick = g ? { lat: g.lat, lng: g.lng, label: g.label, failed: false } : null;
+  state.pick = g ? { lat: g.lat, lng: g.lng, label: g.label, address: '', failed: false } : null;
   openSheet(`
-    <h2>🗺️ ${targetLabel(target)}를 지도에서 고르기</h2>
-    <p class="sub">지도를 눌러 핀을 찍으면 그 자리의 주소를 찾아 드려요.</p>
+    <h2>🔍 ${targetLabel(target)} 찾기</h2>
+    <p class="sub">장소 이름이나 주소로 검색하거나, 지도를 눌러 핀을 찍어 정하세요.</p>
+    <form class="pick-search" id="pick-search-form" role="search">
+      <input id="pick-q" type="search" inputmode="search" enterkeyhint="search" autocomplete="off"
+        placeholder="예: 별무리학교, 이든카페, 금산터미널, 대전역" aria-label="${targetLabel(target)} 장소 검색">
+      <button class="btn sm" type="submit">검색</button>
+    </form>
+    <ul class="pick-results" id="pick-results" hidden></ul>
     <div id="pick-map" class="map pick-map" role="application" aria-label="${targetLabel(target)} 고르기 지도"></div>
     <p class="pick-info" id="pick-info">${pickInfoText()}</p>
     <div class="manage-row">
@@ -274,18 +370,41 @@ function openMapPicker(target) {
       <button type="button" class="btn sm" data-act="close-sheet">취소</button>
     </div>`);
   setTimeout(() => mountPickMap(), 40);
+  if (focusSearch) setTimeout(() => document.getElementById('pick-q')?.focus({ preventScroll: true }), 120);
 }
 
-function mountPickMap() {
+/** 고르기 지도: 카카오맵이 뜨면 카카오맵, 안 되면 Leaflet */
+async function mountPickMap() {
   const el = document.getElementById('pick-map');
   if (!el) return;
   const input = document.getElementById(targetInputId(state.pickTarget));
   const preset = presetGeo(input?.value.trim() ?? '');
-  const start = state.pick ?? preset ?? { lat: 36.0013119, lng: 127.5058117 };
+  const start = state.pick ?? preset ?? HOME;
+  const level = state.pick ? 3 : preset ? 4 : 9;
+
+  const kakao = await getKakao();
+  if (document.getElementById('pick-map') !== el) return; // 그사이 시트를 닫았어요
+  if (kakao) {
+    try {
+      const map = new kakao.maps.Map(el, { center: new kakao.maps.LatLng(start.lat, start.lng), level });
+      state.pickMap = map;
+      state.pickMapKind = 'kakao';
+      if (state.pick) addPickOverlay(kakao, map, state.pick.lat, state.pick.lng);
+      kakao.maps.event.addListener(map, 'click', onPickMapClick);
+      setTimeout(() => { if (state.pickMap === map) { try { map.relayout(); } catch { /* 사라진 지도 */ } } }, 80);
+      return;
+    } catch (err) {
+      console.warn('카카오맵을 그리지 못해 무료 지도로 대체합니다', err);
+    }
+  }
+  mountLeafletPick(el, start, Boolean(state.pick || preset));
+}
+
+function mountLeafletPick(el, start, detailed) {
   let map;
   try {
     map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true })
-      .setView([start.lat, start.lng], state.pick || preset ? 15 : 12);
+      .setView([start.lat, start.lng], detailed ? 15 : 12);
   } catch (err) {
     console.warn('지도를 그리지 못했어요', err);
     return;
@@ -293,50 +412,91 @@ function mountPickMap() {
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 18, attribution: '© OpenStreetMap',
   }).addTo(map);
-
-  let marker = null;
-  if (state.pick) marker = L.marker([state.pick.lat, state.pick.lng], { icon: PICK_ICON() }).addTo(map);
-  state.pickMarker = marker;
-
-  map.on('click', async (e) => {
-    const lat = e.latlng.lat;
-    const lng = e.latlng.lng;
-    state.pick = { lat, lng, label: '', failed: false };
-    dropPickMarker(lat, lng);
-    refreshPick();
-    try {
-      const name = await reverseGeocode(lat, lng);
-      if (!state.pick || state.pick.lat !== lat || state.pick.lng !== lng) return;
-      state.pick.label = name;
-      state.pick.failed = !name;
-    } catch {
-      if (!state.pick || state.pick.lat !== lat || state.pick.lng !== lng) return;
-      state.pick.failed = true;
-    }
-    refreshPick();
-  });
-
   state.pickMap = map;
+  state.pickMapKind = 'leaflet';
+  if (state.pick) state.pickMarker = L.marker([state.pick.lat, state.pick.lng], { icon: PICK_ICON() }).addTo(map);
+  if (!state.pickMap) return;
+  map.on('click', (e) => onPickMapClick({ latLng: { lat: e.latlng.lat, lng: e.latlng.lng } }));
   setTimeout(() => {
     if (state.pickMap !== map) return;
     try { map.invalidateSize(); } catch { /* 이미 사라진 지도 */ }
   }, 80);
 }
 
-function destroyPickMap() {
+/** 지도를 눌렀을 때 (카카오맵·Leaflet 공통 모양으로 넘겨받습니다) */
+async function onPickMapClick(e) {
+  const lat = Number(e.latLng.lat ?? e.latLng.getLat?.());
+  const lng = Number(e.latLng.lng ?? e.latLng.getLng?.());
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  state.pick = { lat, lng, label: '', address: '', failed: false };
+  dropPickMarker(lat, lng);
+  refreshPick();
+  let name = '';
+  try { name = await reverseGeocode(lat, lng); } catch { name = ''; }
+  if (!state.pick || state.pick.lat !== lat || state.pick.lng !== lng) return;
+  state.pick.label = name;
+  state.pick.failed = !name;
+  refreshPick();
+}
+
+function addPickOverlay(kakao, map, lat, lng) {
+  removePickOverlay();
+  const content = document.createElement('div');
+  content.className = 'k-pin pick';
+  content.innerHTML = '<span>📍</span>';
+  state.pickOverlay = new kakao.maps.CustomOverlay({
+    map, position: new kakao.maps.LatLng(lat, lng), content, yAnchor: 1, zIndex: 6,
+  });
+}
+
+function removePickOverlay() {
+  if (state.pickOverlay) {
+    try { state.pickOverlay.setMap(null); } catch { /* 이미 정리됨 */ }
+    state.pickOverlay = null;
+  }
+}
+
+/** 고르기 지도 가운데를 옮깁니다 (카카오맵·Leaflet 공통) */
+function centerPickMap(lat, lng, level = 3) {
   const map = state.pickMap;
-  state.pickMap = null;
-  state.pickMarker = null;
   if (!map) return;
-  try { map.off(); map.remove(); } catch { /* 이미 정리된 지도 */ }
+  try {
+    if (state.pickMapKind === 'kakao') {
+      map.setLevel(level);
+      map.panTo(new window.kakao.maps.LatLng(lat, lng));
+    } else {
+      map.setView([lat, lng], Math.max(13, 18 - level));
+    }
+  } catch { /* 사라진 지도 */ }
 }
 
 /** 고르기 지도에 핀 하나만 유지합니다 */
 function dropPickMarker(lat, lng) {
   const map = state.pickMap;
   if (!map) return;
+  if (state.pickMapKind === 'kakao') {
+    const kakao = window.kakao;
+    if (!kakao?.maps) return;
+    if (state.pickOverlay) {
+      try { state.pickOverlay.setPosition(new kakao.maps.LatLng(lat, lng)); return; } catch { /* 새로 만듭니다 */ }
+    }
+    addPickOverlay(kakao, map, lat, lng);
+    return;
+  }
   if (state.pickMarker) state.pickMarker.setLatLng([lat, lng]);
   else state.pickMarker = L.marker([lat, lng], { icon: PICK_ICON() }).addTo(map);
+}
+
+function destroyPickMap() {
+  const map = state.pickMap;
+  const kind = state.pickMapKind;
+  state.pickMap = null;
+  state.pickMapKind = '';
+  state.pickMarker = null;
+  if (kind === 'kakao') { removePickOverlay(); return; }
+  state.pickOverlay = null;
+  if (!map) return;
+  try { map.off(); map.remove(); } catch { /* 이미 정리된 지도 */ }
 }
 
 function applyPick() {
@@ -355,9 +515,8 @@ async function centerPickOnGps() {
   navigator.geolocation.getCurrentPosition(async (pos) => {
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
-    state.pick = { lat, lng, label: '', failed: false };
-    const map = state.pickMap;
-    if (map) { map.setView([lat, lng], 16); }
+    state.pick = { lat, lng, label: '', address: '', failed: false };
+    centerPickMap(lat, lng, 2);
     dropPickMarker(lat, lng);
     refreshPick();
     try { state.pick.label = await reverseGeocode(lat, lng); } catch { state.pick.failed = true; }
@@ -366,6 +525,7 @@ async function centerPickOnGps() {
     toast('위치 권한이 없어요. 지도를 눌러 직접 골라 주세요.');
   }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
 }
+
 
 /* ── 로그인 ───────────────────────────────────────────────────────── */
 function displayName(user) {
@@ -394,6 +554,7 @@ function welcome(user) {
 
 /* ── 라우팅 ───────────────────────────────────────────────────────── */
 function go(view, rideId = null) {
+  if (view !== 'ride' || rideId !== state.rideId) state.pin = null;
   state.view = view;
   state.rideId = rideId;
   state.error = '';
@@ -615,6 +776,7 @@ function viewNew() {
     </button>`).join('');
   const pickRow = (target) => `
     <div class="pick-row">
+      <button type="button" class="pick-btn" data-act="place-search" data-target="${target}">🔍 장소·주소 검색</button>
       <button type="button" class="pick-btn" data-act="gps" data-target="${target}">📍 내 위치(GPS)</button>
       <button type="button" class="pick-btn" data-act="map-pick" data-target="${target}">🗺️ 지도에서 고르기</button>
     </div>
@@ -975,7 +1137,7 @@ function mapCard(r, location, role, route) {
       <button type="button" class="btn sm" data-act="send-pin" ${state.pin ? '' : 'disabled'}>📌 찍은 위치 알리기</button>
       <button type="button" class="btn sm" data-act="share-toggle" data-on="${r.live_share ? '1' : '0'}">${r.live_share ? 'GPS 공유 끄기' : 'GPS 공유 켜기'}</button>
     </div>` : ''}
-    <p class="fine">지도: © OpenStreetMap · 출발·도착은 글쓴이가 고른 위치, 차 위치는 운전자가 공유를 켰을 때만 갱신됩니다.</p>
+    <p class="fine">지도: 카카오맵 · 출발·도착은 글쓴이가 고른 위치, 차 위치는 운전자가 공유를 켰을 때만 갱신됩니다.</p>
   </section>`;
 }
 
@@ -988,16 +1150,101 @@ const markerIcon = (cls, text) => L.divIcon({
   className: `map-pin ${cls}`, html: `<span>${text}</span>`, iconSize: [32, 32], iconAnchor: [16, 16],
 });
 
-function mountMapIfNeeded() {
+/** 상세 지도: 카카오맵이 뜨면 카카오맵, SDK 가 막히면 Leaflet 으로 안전하게 대체 */
+async function mountMapIfNeeded() {
   const el = document.getElementById('map');
   if (!el) return;
   const car = parsePt(el.dataset.lat && el.dataset.lng ? `${el.dataset.lat},${el.dataset.lng}` : '');
   const origin = parsePt(el.dataset.origin);
   const dest = parsePt(el.dataset.dest);
-  const hasPin = el.dataset.pin === '1';
-  const points = [origin, dest, car].filter(Boolean);
-  const center = points[0] ?? { lat: 36.0013119, lng: 127.5058117 };
+  const canPin = el.dataset.pin === '1';
 
+  const kakao = await getKakao();
+  if (document.getElementById('map') !== el) return; // 그사이 화면이 바뀌었어요
+  if (kakao) {
+    try {
+      mountKakaoDetail(kakao, el, { origin, dest, car, canPin });
+      return;
+    } catch (err) {
+      console.warn('카카오맵을 그리지 못해 무료 지도로 대체합니다', err);
+    }
+  }
+  mountLeafletDetail(el, { origin, dest, car, canPin });
+}
+
+function pinOverlay(kakao, map, p, cls, text, title) {
+  const content = document.createElement('div');
+  content.className = `k-pin ${cls}`;
+  if (title) content.title = title;
+  content.innerHTML = `<span>${text}</span>`;
+  return new kakao.maps.CustomOverlay({
+    map, position: new kakao.maps.LatLng(p.lat, p.lng), content, yAnchor: 1, zIndex: cls === 'car' ? 5 : 4,
+  });
+}
+
+function mountKakaoDetail(kakao, el, { origin, dest, car, canPin }) {
+  const ride = state.detail?.ride;
+  const points = [origin, dest, car].filter(Boolean);
+  const center = points[0] ?? HOME;
+  const map = new kakao.maps.Map(el, {
+    center: new kakao.maps.LatLng(center.lat, center.lng),
+    level: points.length > 1 ? 8 : 4,
+  });
+  state.map = map;
+  state.mapKind = 'kakao';
+
+  // 출발→도착을 점선으로 이어 두면 지도가 넓게 잡혔을 때도 가는 길이 한눈에 보입니다
+  if (origin && dest) {
+    new kakao.maps.Polyline({
+      map,
+      path: [new kakao.maps.LatLng(origin.lat, origin.lng), new kakao.maps.LatLng(dest.lat, dest.lng)],
+      strokeWeight: 3, strokeColor: '#10131a', strokeOpacity: 0.45, strokeStyle: 'dashed',
+    });
+  }
+  if (origin) pinOverlay(kakao, map, origin, 'origin', '출', `출발 · ${ride?.from_place ?? ''}`);
+  if (dest) pinOverlay(kakao, map, dest, 'dest', '도', `도착 · ${ride?.to_place ?? ''}`);
+  if (car) pinOverlay(kakao, map, car, 'car', '🚕', '차 위치');
+  if (state.pin) pinOverlay(kakao, map, state.pin, 'pin', '📌', '찍은 위치');
+
+  if (points.length > 1) {
+    try {
+      const b = new kakao.maps.LatLngBounds();
+      points.forEach((p) => b.extend(new kakao.maps.LatLng(p.lat, p.lng)));
+      map.setBounds(b, 30, 30, 30, 30);
+      // 아주 가까운 두 점일 때 너무 확대되지 않도록
+      if (map.getLevel() < 4) map.setLevel(4);
+    } catch { /* 점이 하나뿐인 경우 */ }
+  }
+  if (canPin) kakao.maps.event.addListener(map, 'click', onDetailMapClick);
+  setTimeout(() => {
+    if (state.map !== map) return;
+    try { map.relayout(); } catch { /* 이미 사라진 지도 */ }
+  }, 80);
+}
+
+/** 상세 지도에서 운전자가 위치를 직접 찍었을 때 (전체를 다시 그리지 않아 깜빡이지 않습니다) */
+function onDetailMapClick(e) {
+  const lat = Number(e?.latLng?.getLat?.() ?? e?.latLng?.lat);
+  const lng = Number(e?.latLng?.getLng?.() ?? e?.latLng?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  state.pin = { lat, lng };
+  const map = state.map;
+  if (state.mapKind === 'kakao' && window.kakao?.maps && map) {
+    pinOverlay(window.kakao, map, state.pin, 'pin', '📌', '찍은 위치');
+  } else if (state.mapKind === 'leaflet' && map) {
+    L.marker([lat, lng], {
+      icon: L.divIcon({ className: 'car-pin manual', html: '<span>📌</span>', iconSize: [34, 34], iconAnchor: [17, 30] }),
+      title: '찍은 위치', alt: '찍은 위치',
+    }).addTo(map);
+  }
+  const btn = document.querySelector('[data-act="send-pin"]');
+  if (btn) btn.disabled = false;
+  toast('지도에 위치를 찍었어요. “찍은 위치 알리기”를 눌러 주세요.');
+}
+
+function mountLeafletDetail(el, { origin, dest, car, canPin }) {
+  const points = [origin, dest, car].filter(Boolean);
+  const center = points[0] ?? HOME;
   let map;
   try {
     map = L.map(el, { zoomControl: true, scrollWheelZoom: false, attributionControl: true })
@@ -1007,12 +1254,12 @@ function mountMapIfNeeded() {
     return;
   }
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 18,
-    attribution: '© OpenStreetMap',
+    maxZoom: 18, attribution: '© OpenStreetMap',
   }).addTo(map);
+  state.map = map;
+  state.mapKind = 'leaflet';
 
   const ride = state.detail?.ride;
-  // 출발→도착을 점선으로 이어 두면 지도가 넓게 잡혔을 때도 가는 길이 한눈에 보입니다
   if (origin && dest) {
     L.polyline([[origin.lat, origin.lng], [dest.lat, dest.lng]], {
       color: '#10131a', weight: 3, opacity: 0.45, dashArray: '8 7', interactive: false,
@@ -1028,16 +1275,7 @@ function mountMapIfNeeded() {
       map.fitBounds(points.map((p) => [p.lat, p.lng]), { padding: [28, 28], maxZoom: 15 });
     } catch { /* 점이 하나뿐인 경우 */ }
   }
-
-  if (hasPin) {
-    map.on('click', (e) => {
-      state.pin = { lat: e.latlng.lat, lng: e.latlng.lng };
-      render();
-      toast('지도에 위치를 찍었어요. “찍은 위치 알리기”를 눌러 주세요.');
-    });
-  }
-  state.map = map;
-  // 지도를 지운 뒤에 늦게 도착한 타이머가 애니메이션을 건드리지 않도록 확인합니다
+  if (canPin) map.on('click', (e) => onDetailMapClick({ latLng: { lat: e.latlng.lat, lng: e.latlng.lng } }));
   setTimeout(() => {
     if (state.map !== map) return;
     try { map.invalidateSize(); } catch { /* 이미 사라진 지도 */ }
@@ -1046,10 +1284,14 @@ function mountMapIfNeeded() {
 
 function destroyMap() {
   const map = state.map;
+  const kind = state.mapKind;
   state.map = null;
+  state.mapKind = '';
   if (!map) return;
+  if (kind === 'kakao') return; // 카카오맵은 컨테이너가 사라지면 함께 정리됩니다
   try { map.off(); map.remove(); } catch { /* 이미 정리된 지도 */ }
 }
+
 
 /* ── 이벤트 ───────────────────────────────────────────────────────── */
 document.addEventListener('click', async (ev) => {
@@ -1094,7 +1336,9 @@ document.addEventListener('click', async (ev) => {
     return;
   }
   if (act === 'gps') { fillFromGps(target.dataset.target); return; }
+  if (act === 'place-search') { openMapPicker(target.dataset.target, true); return; }
   if (act === 'map-pick') { openMapPicker(target.dataset.target); return; }
+  if (act === 'pick-result') { choosePickResult(Number(target.dataset.i)); return; }
   if (act === 'pick-apply') { applyPick(); return; }
   if (act === 'pick-gps') { centerPickOnGps(); return; }
   if (act === 'swap') {
@@ -1491,6 +1735,11 @@ document.addEventListener('click', (ev) => {
 
 /* ── 이메일 로그인 (구글 계정이 없는 분용) ─────────────────────────── */
 document.addEventListener('submit', async (ev) => {
+  if (ev.target.id === 'pick-search-form') {
+    ev.preventDefault();
+    await runPlaceSearch(document.getElementById('pick-q')?.value);
+    return;
+  }
   if (ev.target.id !== 'email-login-form') return;
   ev.preventDefault();
   const email = document.getElementById('em-email').value.trim();
