@@ -576,28 +576,43 @@ function go(view, rideId = null) {
 }
 
 /* ── 데이터 ───────────────────────────────────────────────────────── */
+let listSeq = 0;
 async function loadList() {
+  const seq = ++listSeq;
+  const wasLoading = state.loading;
   try {
     const rides = await api.listRides({ mine: state.filter === 'mine', userId: state.user?.id ?? null });
+    if (seq !== listSeq) return; // 그사이 다른 탭을 눌렀어요 — 늦게 온 응답은 버립니다
     const sig = JSON.stringify(rides);
     const changed = sig !== state.lastListSig;
     state.rides = rides;
     state.error = '';
     state.loading = false;
-    // 바뀐 게 없으면 화면을 다시 그리지 않습니다 (누르려는 버튼이 사라지는 일을 막고, 깜빡임도 줄입니다)
-    if (changed) { state.lastListSig = sig; render(); }
+    if (changed) state.lastListSig = sig;
+    // 목록이 그대로여도 '불러오는 중'이 떠 있던 경우에는 꼭 다시 그려서 지웁니다
+    if (changed || wasLoading) render();
   } catch (e) {
+    if (seq !== listSeq) return;
     state.error = e.message;
     state.loading = false;
     render();
+  } finally {
+    if (seq === listSeq) state.loading = false;
   }
 }
 
 async function loadDetail() {
   if (!state.rideId) return;
+  const wasLoading = state.loading;
   try {
     const d = await api.getRide(state.rideId, { signedIn: Boolean(state.user) });
-    if (!d) { state.error = '글을 찾을 수 없어요. 링크가 맞는지 확인해 주세요.'; state.detail = null; render(); return; }
+    if (!d) {
+      state.error = '글을 찾을 수 없어요. 링크가 맞는지 확인해 주세요.';
+      state.detail = null;
+      state.loading = false;
+      render();
+      return;
+    }
     const sig = JSON.stringify([
       d.ride.status, d.ride.pickup_at, d.ride.live_share, d.ride.updated_at,
       d.members.map((m) => [m.id, m.status]),
@@ -610,11 +625,14 @@ async function loadDetail() {
     state.error = '';
     state.loading = false;
     if (changed) { state.detailSig = sig; render(); }
+    else if (wasLoading) render();
     else renderUserChip();
   } catch (e) {
     state.error = e.message;
     state.loading = false;
     render();
+  } finally {
+    state.loading = false;
   }
 }
 
@@ -722,7 +740,7 @@ function viewHome() {
   ${state.loading ? '<p class="loading">불러오는 중…</p>' : ''}
 
   <div class="rides">
-    ${list.length ? list.map(rideCard).join('') : emptyList()}
+    ${list.length ? list.map(rideCard).join('') : (state.loading ? '' : emptyList())}
   </div>
 
   <section class="how">

@@ -57,8 +57,10 @@ export function searchPlaces(kakao, keyword, center = null) {
   return new Promise((resolve, reject) => {
     const places = new kakao.maps.services.Places();
     const opt = { size: 8 };
+    // x·y 를 주면 결과마다 거리(distance)가 함께 옵니다. 정렬은 정확도 순(기본) 그대로 두어
+    // '대전역' 같은 검색어가 엉뚱한 곳으로 밀리지 않게 합니다.
     if (center && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
-      opt.x = String(center.lng); opt.y = String(center.lat); opt.sort = 'distance';
+      opt.x = String(center.lng); opt.y = String(center.lat);
     }
     places.keywordSearch(keyword, (data, status) => {
       const st = S(kakao);
