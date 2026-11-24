@@ -1086,11 +1086,11 @@ document.addEventListener('click', async (ev) => {
     return;
   }
   if (act === 'fill-place') {
-    const target = target.dataset.target;
-    const input = document.getElementById(targetInputId(target));
+    const which = target.dataset.target;
+    const input = document.getElementById(targetInputId(which));
     if (input) { input.value = target.dataset.name; input.classList.add('filled'); }
     const geo = presetGeo(target.dataset.name);
-    if (geo) applyGeo(target, geo); else clearGeo(target);
+    if (geo) applyGeo(which, geo); else clearGeo(which);
     return;
   }
   if (act === 'gps') { fillFromGps(target.dataset.target); return; }
