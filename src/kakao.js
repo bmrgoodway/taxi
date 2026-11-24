@@ -51,22 +51,28 @@ export async function kakaoOrNull() {
 
 const S = (kakao) => kakao?.maps?.services?.Status || {};
 
-/** 장소 이름으로 검색 — [{ name, address, lat, lng }] */
-export function searchPlaces(kakao, keyword) {
+/** 장소 이름으로 검색 — [{ name, address, distance, lat, lng }]
+ *  center 를 주면 거리(m)가 함께 오고, 가까운 순으로 정렬됩니다. */
+export function searchPlaces(kakao, keyword, center = null) {
   return new Promise((resolve, reject) => {
     const places = new kakao.maps.services.Places();
+    const opt = { size: 8 };
+    if (center && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
+      opt.x = String(center.lng); opt.y = String(center.lat); opt.sort = 'distance';
+    }
     places.keywordSearch(keyword, (data, status) => {
       const st = S(kakao);
       if (status === st.OK) {
         resolve((data || []).map((d) => ({
           name: d.place_name,
           address: d.road_address_name || d.address_name || '',
+          distance: d.distance ? Number(d.distance) : null,
           lat: Number(d.y),
           lng: Number(d.x),
         })).filter((r) => Number.isFinite(r.lat) && Number.isFinite(r.lng)));
       } else if (status === st.ZERO_RESULT) resolve([]);
       else reject(new Error('장소를 검색하지 못했어요'));
-    }, { size: 8 });
+    }, opt);
   });
 }
 

@@ -225,6 +225,7 @@ async function nominatimSearch(query) {
 }
 
 const coordText = (lat, lng) => `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+const distText = (m) => (m == null || !Number.isFinite(Number(m)) ? '' : Number(m) < 1000 ? `${Math.round(Number(m))}m` : `${(Number(m) / 1000).toFixed(1)}km`);
 const targetLabel = (target) => (target === 'from' ? '출발지' : '도착지');
 const targetInputId = (target) => (target === 'from' ? 'f-from' : 'f-to');
 
@@ -306,7 +307,7 @@ function renderPickResults() {
   ul.innerHTML = state.pickResults.length
     ? state.pickResults.map((r, i) => `
       <li><button type="button" class="pick-result" data-act="pick-result" data-i="${i}">
-        <b>${esc(r.name)}</b><span>${esc(r.address || '')}</span>
+        <b>${esc(r.name)}</b><span>${esc(r.address || '')}${r.distance ? ` · ${distText(r.distance)}` : ''}</span>
       </button></li>`).join('')
     : `<li class="pick-empty">${esc(state.pickMsg || '검색 결과가 없어요. 지도에서 직접 골라 주세요.')}</li>`;
 }
@@ -324,7 +325,7 @@ async function runPlaceSearch(raw) {
   let failed = false;
   if (kakao) {
     try {
-      list = await searchPlaces(kakao, query);
+      list = await searchPlaces(kakao, query, state.pick ?? HOME);
       if (!list.length) list = await searchAddress(kakao, query);
     } catch { failed = true; }
   }
