@@ -11,7 +11,9 @@ const cspFor = (SB) => [
   "default-src 'self'",
   // 카카오맵 JavaScript SDK(dapi.kakao.com) 와 SDK 가 불러오는 조각(t1.daumcdn.net 등)
   "script-src 'self' https://dapi.kakao.com https://*.daumcdn.net https://*.kakao.com https://*.kakaocdn.net",
-  "style-src 'self' https://*.daumcdn.net",
+  // 카카오맵 SDK 가 지도 조각·오버레이 위치를 style 속성으로 잡기 때문에 'unsafe-inline' 이 필요합니다.
+  // (스크립트는 아래처럼 출처를 좁게 제한하고, 화면에 넣는 값은 모두 esc() 로 걸러 씁니다)
+  "style-src 'self' 'unsafe-inline' https://*.daumcdn.net",
   // 지도 타일·마커: 카카오(daumcdn·kakao) / 대체 지도(openstreetmap) / 앱 이미지
   `img-src 'self' data: blob: ${SB} https://*.tile.openstreetmap.org https://*.daumcdn.net https://*.daum.net https://*.kakao.com https://*.kakaocdn.net`,
   "font-src 'self' data: https://*.daumcdn.net",
