@@ -8,7 +8,7 @@ import { loginWithGoogle, loginWithPassword, logout, onUserChange } from './auth
 import { local, session } from './store.js';
 import { applyAppInfo } from './app-info.js';
 import { PLACES, placeOf } from './places.js';
-import { kakaoOrNull, searchPlaces, searchAddress, coordsToAddress, KAKAO_KEY } from './kakao.js';
+import { kakaoOrNull, searchPlaces, searchAddress, coordsToAddress } from './kakao.js';
 import * as api from './api.js';
 
 /* ── 상태 ─────────────────────────────────────────────────────────── */
